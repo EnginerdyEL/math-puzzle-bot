@@ -61,6 +61,7 @@ The puzzle should:
 - Be interesting or have a surprising result if possible
 - Never approximate irrational numbers — leave answers in exact form (e.g. 16 + 8√2)
 - Accept non-clean answers if that is the correct result — do not force a clean answer
+- Keep solution_steps concise and under 1500 characters total
 
 Solve the puzzle using one method, then verify using a second independent method.
 Only finalize the puzzle if both methods agree exactly.
@@ -83,7 +84,15 @@ Respond in this exact JSON format with no other text:
     if raw.startswith("```"):
         raw = "\n".join(raw.split("\n")[1:-1])
     # print(f"Raw response:\n{raw}") # DEBUG
-    return json.loads(raw)
+    # DEBUG: Putting the return in a try/except catch because sometimes the load brings back
+    #        characters that can't be parsed, but then when I rerun it's already changed, so this
+    #        except block prints the parsing error before terminating the run
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"JSON parse error: {e}")
+        print(f"Context: {raw[max(0,e.pos-50):e.pos+50]}")
+        raise
 
 
 def post_to_discord(message):
@@ -104,18 +113,31 @@ def main():
     if state["puzzle"]:
         print("Posting yesterday's answer")
         if "solution_steps" in state:
+            # Post answer separately from solution
             answer_message = (
                 f"💡 **Answer to yesterday's {state['category']} puzzle:**\n\n"
-                f"**Answer:** ||{state['solution_answer']}||\n\n"
-                f"**Solution:**\n{state['solution_steps']}"
+                f"**Answer:** ||{state['solution_answer']}||"
+            )
+            solution_steps = state['solution_steps']
+            if len(solution_steps) > 1500:
+                solution_steps = solution_steps[:1500] + "\n*(solution truncated)*"
+            solution_message = (
+                f"**Solution:**\n{solution_steps}"
             )
         else:
             answer_message = (
                 f"💡 **Answer to yesterday's {state['category']} puzzle:**\n\n"
-                f"**Answer:** ||{state['answer']}||\n\n"
-                f"**Solution:**\n{state['solution']}"
+                f"**Answer:** ||{state['answer']}||"
             )
+            solution_steps = state['solution']
+            if len(solution_steps) > 1500:
+                solution_steps = solution_steps[:1500] + "\n*(solution truncated)*"
+            solution_message = (
+                f"**Solution:**\n{solution_steps}"
+            )
+        # print(f"Answer message:\n{answer_message}") # DEBUG
         post_to_discord(answer_message)
+        post_to_discord(solution_message)
     
     # Step 3: Generate today's puzzle
     category = random.choice(CATEGORIES)

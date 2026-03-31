@@ -29,13 +29,13 @@ Puzzles are randomly selected from:
 ## English Quiz categories
 
 Quizzes are randomly selected from:
- - idioms
- - phrasal verbs
- - vocabulary
- - verb tenses
- - prepositions
- - slang
- - grammar
+ - Idioms
+ - Phrasal verbs
+ - Vocabulary
+ - Verb tenses
+ - Prepositions
+ - Slang
+ - Grammar
 
 ## Tech stack
 

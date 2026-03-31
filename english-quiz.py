@@ -3,7 +3,6 @@ import json
 import os
 import random
 import requests
-from datetime import date
 from dotenv import load_dotenv
 
 # Load secrets from .env for local testing
@@ -44,7 +43,7 @@ Respond in this exact JSON format with no other text:
 "problems": "the problem set here",
 "answers": "the concise answers",
 "insight": "more details of the answers or an insight related to the questions or theme",
-"joke": "a short joke about the category or one of the words, phrases, or idioms from the quiz"
+"joke": "a short joke about language learning for adult English learners and helpers"
 }}"""
     message = client.messages.create(
         # model="claude-sonnet-4-6",
@@ -85,7 +84,7 @@ def main():
     quiz_message = (
         f"📚 **Daily English Quiz — {category.title()}**\n\n"
         f"{quiz_data['problems']}\n\n"
-        f"*Think you know the answers? Share below and compare with the answers in the spoiler tags!*"
+        f"*Think you know the answers? Share below and check the answers!*"
     )
     post_to_discord(quiz_message)
 
@@ -93,8 +92,8 @@ def main():
     print("Posting the answers")
     if "answers" in quiz_data:
         answer_message = (
-            f"💡 **Answer to the {category} quiz:**\n\n"
-            f"**Answer:** ||{quiz_data['answers']}||\n\n"
+            f"💡 **Answers to the {category.title()} Quiz:**\n\n"
+            f"||{quiz_data['answers']}||\n"
             f"*Please verify the answers with an English Helper*"
         )
         # append insight if available
@@ -103,16 +102,16 @@ def main():
             if len(insight) > 1500:
                 insight = insight[:1500] + "\n*(truncated)*"
             insight_message = (
-                f"**Did You Know?**\n{insight}"
+                f"🤔 **Did You Know?**\n{insight}"
             )
-            answer_message = answer_message + "\n" + insight_message
+            answer_message = answer_message + "\n\n" + insight_message
         # append joke if available
         if "joke" in quiz_data:
             joke = quiz_data['joke']
             if len(joke) > 1500:
                 joke = joke[:1500] + "\n*(truncated)*"
             joke_message = (
-                f"**Want a Laugh?**\n{joke}"
+                f"😭 **Joke Time**\n{joke}"
             )
             answer_message = answer_message + "\n\n" + joke_message
         # print(f"Answer message:\n{answer_message}") # DEBUG

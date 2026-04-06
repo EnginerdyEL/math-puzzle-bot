@@ -62,6 +62,7 @@ The puzzle should:
 - Never approximate irrational numbers — leave answers in exact form (e.g. 16 + 8√2)
 - Accept non-clean answers if that is the correct result — do not force a clean answer
 - Keep solution_steps concise and under 1500 characters total
+- Ensure all JSON strings are properly escaped — never use unescaped double quotes inside string values, use single quotes or rephrase instead
 
 Solve the puzzle using one method, then verify using a second independent method.
 Only finalize the puzzle if both methods agree exactly.
@@ -92,6 +93,8 @@ Respond in this exact JSON format with no other text:
     except json.JSONDecodeError as e:
         print(f"JSON parse error: {e}")
         print(f"Context: {raw[max(0,e.pos-50):e.pos+50]}")
+        # Attempt to fix common issues: unescaped quotes inside strings
+        # This is a last resort — add to prompt instead
         raise
 
 
@@ -142,7 +145,17 @@ def main():
     # Step 3: Generate today's puzzle
     category = random.choice(CATEGORIES)
     print(f"Generating {category} puzzle")
-    puzzle_data = generate_puzzle(category)
+    puzzle_data = None
+    for attempt in range(3):
+        try:
+            puzzle_data = generate_puzzle(category)
+            break
+        except Exception as e:
+            print(f"Attempt {attempt + 1} failed: {e}")
+            if attempt == 2:
+                post_to_discord("⚠️ Brainy encountered an error generating today's puzzle. Please try again later.")
+                print("All attempts failed, posted error message.")
+                return
 
     # Step 4: Post today's puzzle
     print("Posting today's puzzle")

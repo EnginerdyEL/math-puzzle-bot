@@ -3,7 +3,7 @@ import json
 import os
 import random
 import requests
-from datetime import date
+from datetime import date, datetime
 from dotenv import load_dotenv
 
 # Load secrets from .env for local testing
@@ -22,6 +22,11 @@ CATEGORIES = [
     "statistics",
     "number theory",
 ]
+
+
+def ts():
+    """Return current timestamp string for logging."""
+    return (f"{datetime.now():%Y-%m-%d %H:%M:%S.%f}")[:-5]
 
 
 def get_gist():
@@ -109,12 +114,12 @@ def main():
     today = str(date.today())
 
     # Step 1: Read yesterday's state from GitHub Gist
-    print("Reading previous puzzle state from Gist")
+    print(f"[{ts()}] Reading previous puzzle state from Gist")
     state = get_gist()
 
     # Step 2: Post yesterday's answer if there was a puzzle
     if state["puzzle"]:
-        print("Posting yesterday's answer")
+        print(f"[{ts()}] Posting yesterday's answer")
         if "solution_steps" in state:
             # Post answer separately from solution
             answer_message = (
@@ -138,27 +143,27 @@ def main():
             solution_message = (
                 f"**Solution:**\n{solution_steps}"
             )
-        # print(f"Answer message:\n{answer_message}") # DEBUG
+        # print(f"[{ts()}] Answer message:\n{answer_message}") # DEBUG
         post_to_discord(answer_message)
         post_to_discord(solution_message)
     
     # Step 3: Generate today's puzzle
     category = random.choice(CATEGORIES)
-    print(f"Generating {category} puzzle")
+    print(f"[{ts()}] Generating {category} puzzle")
     puzzle_data = None
     for attempt in range(3):
         try:
             puzzle_data = generate_puzzle(category)
             break
         except Exception as e:
-            print(f"Attempt {attempt + 1} failed: {e}")
+            print(f"[{ts()}] Attempt {attempt + 1} failed: {e}")
             if attempt == 2:
                 post_to_discord("⚠️ Brainy encountered an error generating today's puzzle. Please try again later.")
-                print("All attempts failed, posted error message.")
+                print(f"[{ts()}] All attempts failed, posted error message.")
                 return
 
     # Step 4: Post today's puzzle
-    print("Posting today's puzzle")
+    print(f"[{ts()}] Posting today's puzzle")
     puzzle_message = (
         f"🧩 **Daily Puzzle — {category.title()}**\n\n"
         f"{puzzle_data['puzzle']}\n\n"
@@ -169,7 +174,7 @@ def main():
     post_to_discord(puzzle_message)
 
     # Step 5: Save today's state to Gist
-    print("Saving today's state to Gist")
+    print(f"[{ts()}] Saving today's state to Gist")
     new_state = {
         "date": today,
         "category": category,
@@ -178,7 +183,7 @@ def main():
         "solution_answer": puzzle_data["solution_answer"]
     }
     update_gist(new_state)
-    print("Done!")
+    print(f"[{ts()}] Done!")
 
 
 if __name__ == "__main__":

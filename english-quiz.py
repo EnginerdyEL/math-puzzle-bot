@@ -3,6 +3,7 @@ import json
 import os
 import random
 import requests
+from puzzle import ts
 from dotenv import load_dotenv
 
 # Load secrets from .env for local testing
@@ -76,11 +77,11 @@ def post_to_discord(message):
 def main():
     # Step 1: Generate today's quiz
     category = random.choice(CATEGORIES)
-    print(f"Generating {category} quiz")
+    print(f"[{ts()}] Generating {category} quiz")
     quiz_data = generate_quiz(category)
 
     # Step 2: Post today's quiz
-    print("Posting today's quiz")
+    print(f"[{ts()}] Posting today's quiz")
     quiz_message = (
         f"📚 **Daily English Quiz — {category.title()}**\n\n"
         f"{quiz_data['problems']}\n\n"
@@ -89,7 +90,7 @@ def main():
     post_to_discord(quiz_message)
 
     # Step 3: Post the answers and insight separately from the problems
-    print("Posting the answers")
+    print(f"[{ts()}] Posting the answers")
     if "answers" in quiz_data:
         answer_message = (
             f"💡 **Answers to the {category.title()} Quiz:**\n\n"
@@ -116,7 +117,7 @@ def main():
         #     answer_message = answer_message + "\n\n" + joke_message
         # print(f"Answer message:\n{answer_message}") # DEBUG
         post_to_discord(answer_message)
-    print("Done!")
+    print(f"[{ts()}] Done!")
 
 
 if __name__ == "__main__":

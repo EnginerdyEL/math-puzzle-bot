@@ -3,8 +3,9 @@ import json
 import os
 import random
 import requests
-from datetime import date, datetime
+from datetime import date
 from dotenv import load_dotenv
+from shared import ts, parse_json_response, post_to_discord_safe
 
 # Load secrets from .env for local testing
 load_dotenv()
@@ -19,14 +20,11 @@ CATEGORIES = [
     "geometry",
     "logic",
     "calculus",
-    "statistics",
-    "number theory",
+    "number theory"
 ]
 
-
-def ts():
-    """Return current timestamp string for logging."""
-    return (f"{datetime.now():%Y-%m-%d %H:%M:%S.%f}")[:-5]
+BOT_NAME = "Brainy"
+MAX_ATTEMPTS = 3
 
 
 def get_gist():
@@ -36,11 +34,24 @@ def get_gist():
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     content = response.json()["files"]["puzzle_state.json"]["content"]
-    return json.loads(content)
+    data = json.loads(content)
+    
+    # Ensure puzzle_history exists (for backwards compatibility)
+    if "puzzle_history" not in data:
+        data["puzzle_history"] = []
+    
+    return data
 
 
 def update_gist(data):
-    """Write today's puzzle state to GitHub Gist."""
+    """Write today's puzzle state to GitHub Gist.
+    
+    Args:
+        data: Dictionary to write to Gist
+        
+    Raises:
+        requests.RequestException: If the PATCH request fails
+    """
     url = f"https://api.github.com/gists/{GIST_ID}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
     payload = {
@@ -54,9 +65,33 @@ def update_gist(data):
     response.raise_for_status()
 
 
-def generate_puzzle(category):
-    """Generate a puzzle using the Anthropic API."""
+def generate_puzzle(category, puzzle_history):
+    """Generate a puzzle using the Anthropic API.
+    
+    Generates a puzzle with solution steps, answer, hint, and difficulty rating.
+    Uses two-method verification to ensure solution correctness.
+    
+    Args:
+        category: Puzzle category (e.g., "geometry", "probability")
+        puzzle_history: List of recent puzzle texts to inform Claude about recent puzzles
+        
+    Returns:
+        dict: Contains 'puzzle', 'solution_steps', 'solution_answer', 'hint', 'difficulty'
+        
+    Raises:
+        json.JSONDecodeError: If response cannot be parsed as JSON
+    """
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    
+    # Build context about recent puzzles if history exists
+    history_context = ""
+    if puzzle_history:
+        history_context = (
+            "\n\nAvoid generating puzzles similar to these recent ones:\n"
+        )
+        for i, past_puzzle in enumerate(puzzle_history[-5:], 1):  # Last 5 puzzles
+            history_context += f"{i}. {past_puzzle[:120]}...\n"
+    
     prompt = f"""Generate a {category} puzzle suitable for someone with an engineering background who enjoys math puzzles for fun.
 
 The puzzle should:
@@ -67,16 +102,23 @@ The puzzle should:
 - Never approximate irrational numbers — leave answers in exact form (e.g. 16 + 8√2)
 - Accept non-clean answers if that is the correct result — do not force a clean answer
 - Keep solution_steps concise and under 1500 characters total
-- Ensure all JSON strings are properly escaped — never use unescaped double quotes inside string values, use single quotes or rephrase instead
+- Ensure all JSON strings are properly escaped — never use unescaped double quotes inside string values, use single quotes or rephrase instead{history_context}
 
 Solve the puzzle using one method, then verify using a second independent method.
 Only finalize the puzzle if both methods agree exactly.
+
+Also provide:
+- A subtle one-line hint that points toward *what to think about* without suggesting the method or answer
+  (e.g., "Consider how the surfaces connect" NOT "Unfold the cube and use distance formula")
+- A difficulty rating from 1-10 (1 = trivial, 10 = extremely hard; aim for 5-7 for typical solvers)
 
 Respond in this exact JSON format with no other text:
 {{
 "puzzle": "the problem statement here",
 "solution_steps": "the step-by-step working shown openly, no final answer here",
-"solution_answer": "one concise line stating the final answer"
+"solution_answer": "one concise line stating the final answer",
+"hint": "a subtle one-line hint pointing to what to think about, not the method",
+"difficulty": 6
 }}"""
     message = client.messages.create(
         model="claude-sonnet-4-6",
@@ -85,104 +127,152 @@ Respond in this exact JSON format with no other text:
     )
 
     raw = message.content[0].text
-    # Strip markdown code blocks if present
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = "\n".join(raw.split("\n")[1:-1])
-    # print(f"Raw response:\n{raw}") # DEBUG
-    # DEBUG: Putting the return in a try/except catch because sometimes the load brings back
-    #        characters that can't be parsed, but then when I rerun it's already changed, so this
-    #        except block prints the parsing error before terminating the run
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"JSON parse error: {e}")
-        print(f"Context: {raw[max(0,e.pos-50):e.pos+50]}")
-        # Attempt to fix common issues: unescaped quotes inside strings
-        # This is a last resort — add to prompt instead
-        raise
-
-
-def post_to_discord(message):
-    """Post a message to Discord via webhook."""
-    payload = {"content": message, "username": "Brainy"}
-    response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-    response.raise_for_status()
+    return parse_json_response(raw)
 
 
 def main():
     today = str(date.today())
 
     # Step 1: Read yesterday's state from GitHub Gist
-    print(f"[{ts()}] Reading previous puzzle state from Gist")
-    state = get_gist()
+    try:
+        print(f"[{ts()}] Reading previous puzzle state from Gist")
+        state = get_gist()
+    except requests.RequestException as e:
+        print(f"[{ts()}] Failed to read Gist: {e}")
+        post_to_discord_safe(
+            "⚠️ Brainy encountered an error reading the previous puzzle. Please check GitHub Gist access.",
+            BOT_NAME,
+            DISCORD_WEBHOOK_URL
+        )
+        return
 
     # Step 2: Post yesterday's answer if there was a puzzle
-    if state["puzzle"]:
+    if state.get("puzzle"):
         print(f"[{ts()}] Posting yesterday's answer")
+        
+        # Handle both old schema (answer/solution) and new schema (solution_answer/solution_steps)
         if "solution_steps" in state:
-            # Post answer separately from solution
-            answer_message = (
-                f"💡 **Answer to yesterday's {state['category']} puzzle:**\n\n"
-                f"**Answer:** ||{state['solution_answer']}||"
-            )
-            solution_steps = state['solution_steps']
-            if len(solution_steps) > 1500:
-                solution_steps = solution_steps[:1500] + "\n*(solution truncated)*"
-            solution_message = (
-                f"**Solution:**\n{solution_steps}"
-            )
+            solution_answer = state.get("solution_answer", "N/A")
+            solution_steps = state.get("solution_steps", "N/A")
         else:
-            answer_message = (
-                f"💡 **Answer to yesterday's {state['category']} puzzle:**\n\n"
-                f"**Answer:** ||{state['answer']}||"
-            )
-            solution_steps = state['solution']
-            if len(solution_steps) > 1500:
-                solution_steps = solution_steps[:1500] + "\n*(solution truncated)*"
-            solution_message = (
-                f"**Solution:**\n{solution_steps}"
-            )
-        # print(f"[{ts()}] Answer message:\n{answer_message}") # DEBUG
-        post_to_discord(answer_message)
-        post_to_discord(solution_message)
+            solution_answer = state.get("answer", "N/A")
+            solution_steps = state.get("solution", "N/A")
+        
+        # Validate solution_steps length before posting
+        if len(solution_steps) > 1500:
+            solution_steps = solution_steps[:1500] + "\n*(solution truncated)*"
+        
+        answer_message = (
+            f"💡 **Answer to yesterday's {state['category']} puzzle:**\n\n"
+            f"**Answer:** ||{solution_answer}||"
+        )
+        if state.get('difficulty'):
+            answer_message += f"\n\n*Difficulty: {state['difficulty']}/10*"
+        
+        solution_message = f"**Solution:**\n{solution_steps}"
+        
+        if not post_to_discord_safe(answer_message, BOT_NAME, DISCORD_WEBHOOK_URL):
+            print(f"[{ts()}] Warning: Failed to post answer message (may be too long)")
+        
+        if not post_to_discord_safe(solution_message, BOT_NAME, DISCORD_WEBHOOK_URL):
+            print(f"[{ts()}] Warning: Failed to post solution message (may be too long)")
+        
+        # Step 2b: Post hint if available (with spoiler tag)
+        if state.get("hint"):
+            hint_message = f"💡 **Hint for reference:**\n||{state['hint']}||"
+            if not post_to_discord_safe(hint_message, BOT_NAME, DISCORD_WEBHOOK_URL):
+                print(f"[{ts()}] Warning: Failed to post hint message")
     
     # Step 3: Generate today's puzzle
     category = random.choice(CATEGORIES)
     print(f"[{ts()}] Generating {category} puzzle")
+    
+    puzzle_history = state.get("puzzle_history", [])
     puzzle_data = None
-    for attempt in range(3):
+    for attempt in range(MAX_ATTEMPTS):
         try:
-            puzzle_data = generate_puzzle(category)
+            puzzle_data = generate_puzzle(category, puzzle_history)
+            print(f"[{ts()}] Puzzle generated successfully on attempt {attempt + 1}")
             break
+        except json.JSONDecodeError as e:
+            print(f"[{ts()}] Attempt {attempt + 1}/{MAX_ATTEMPTS} failed: {e}")
+            if attempt == MAX_ATTEMPTS - 1:
+                post_to_discord_safe(
+                    "⚠️ Brainy encountered an error generating today's puzzle. Please try again later.",
+                    BOT_NAME,
+                    DISCORD_WEBHOOK_URL
+                )
+                print(f"[{ts()}] All {MAX_ATTEMPTS} attempts failed, posted error message.")
+                return
         except Exception as e:
-            print(f"[{ts()}] Attempt {attempt + 1} failed: {e}")
-            if attempt == 2:
-                post_to_discord("⚠️ Brainy encountered an error generating today's puzzle. Please try again later.")
-                print(f"[{ts()}] All attempts failed, posted error message.")
+            print(f"[{ts()}] Attempt {attempt + 1}/{MAX_ATTEMPTS} failed with unexpected error: {e}")
+            if attempt == MAX_ATTEMPTS - 1:
+                post_to_discord_safe(
+                    "⚠️ Brainy encountered an error generating today's puzzle. Please try again later.",
+                    BOT_NAME,
+                    DISCORD_WEBHOOK_URL
+                )
+                print(f"[{ts()}] All {MAX_ATTEMPTS} attempts failed, posted error message.")
                 return
 
     # Step 4: Post today's puzzle
     print(f"[{ts()}] Posting today's puzzle")
+    
+    difficulty = puzzle_data.get("difficulty")
     puzzle_message = (
-        f"🧩 **Daily Puzzle — {category.title()}**\n\n"
-        f"{puzzle_data['puzzle']}\n\n"
+        f"🧩 **Daily Puzzle — {category.title()}**\n"
+    )
+    if difficulty:
+        puzzle_message += f"**Difficulty: ⭐** ({difficulty}/10)\n"
+    puzzle_message += (
+        f"\n{puzzle_data['puzzle']}\n\n"
         f"*Think you know the answer? Share your solution below! "
         f"The answer will be revealed later — please verify it yourself!* 🤓"
     )
 
-    post_to_discord(puzzle_message)
+    if not post_to_discord_safe(puzzle_message, BOT_NAME, DISCORD_WEBHOOK_URL):
+        print(f"[{ts()}] Error: Failed to post puzzle (payload too long). Aborting.")
+        return
+
+    # Step 4b: Post hint as a follow-up message
+    if puzzle_data.get("hint"):
+        hint_message = f"💡 **Hint:** ||{puzzle_data['hint']}||"
+        if not post_to_discord_safe(hint_message, BOT_NAME, DISCORD_WEBHOOK_URL):
+            print(f"[{ts()}] Warning: Failed to post hint (payload too long)")
 
     # Step 5: Save today's state to Gist
+    # Wrap in try/catch to ensure we only consider success if we can persist the state
     print(f"[{ts()}] Saving today's state to Gist")
-    new_state = {
-        "date": today,
-        "category": category,
-        "puzzle": puzzle_data["puzzle"],
-        "solution_steps": puzzle_data["solution_steps"],
-        "solution_answer": puzzle_data["solution_answer"]
-    }
-    update_gist(new_state)
+    try:
+        # Maintain puzzle history (keep last 5 puzzles to match prompt context)
+        updated_history = puzzle_history + [puzzle_data["puzzle"]]
+        if len(updated_history) > 5:
+            updated_history = updated_history[-5:]
+        
+        new_state = {
+            "date": today,
+            "category": category,
+            "puzzle": puzzle_data["puzzle"],
+            "solution_steps": puzzle_data["solution_steps"],
+            "solution_answer": puzzle_data["solution_answer"],
+            "hint": puzzle_data.get("hint", ""),
+            "difficulty": puzzle_data.get("difficulty", 0),
+            "puzzle_history": updated_history
+        }
+        update_gist(new_state)
+        print(f"[{ts()}] Successfully saved state to Gist")
+    except requests.RequestException as e:
+        print(f"[{ts()}] CRITICAL: Failed to save puzzle state to Gist: {e}")
+        print(f"[{ts()}] The puzzle was posted but state was not persisted. "
+              f"Next run will not have today's solution.")
+        post_to_discord_safe(
+            "⚠️ Warning: Puzzle was posted but state could not be saved. "
+            "Tomorrow's solution reveal may fail.",
+            BOT_NAME,
+            DISCORD_WEBHOOK_URL
+        )
+        return
+
     print(f"[{ts()}] Done!")
 
 

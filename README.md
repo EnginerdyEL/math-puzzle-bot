@@ -8,13 +8,14 @@ Two Discord automations powered by the Anthropic Claude API:
 
 Every day, Brainy automatically:
 1. Posts the solution to yesterday's puzzle (answer behind a spoiler tag)
-2. Generates a new puzzle using the Anthropic Claude API
-3. Posts the new puzzle with a reminder to verify the answer yourself
-4. Saves today's puzzle and solution to a GitHub Gist for tomorrow's reveal
+2. Generates a new puzzle using the Anthropic Claude API with difficulty rating and hint
+3. Posts the new puzzle with difficulty level (1-10) and a spoiler-tagged hint
+4. Saves today's puzzle, solution, hint, and difficulty to GitHub Gist for tomorrow's reveal
+5. Maintains a history of recent puzzles to avoid generating similar ones
 
 Every day, English Quiz automatically:
 1. Generates and posts a new quiz using the Anthropic Claude API
-2. Posts the answer, insight, and a joke on the subject
+2. Posts the answers and insight in spoiler tags for self-verification
 
 ## Puzzle categories
 
@@ -29,22 +30,44 @@ Puzzles are randomly selected from:
 ## English Quiz categories
 
 Quizzes are randomly selected from:
- - Idioms
- - Phrasal verbs
- - Vocabulary
- - Verb tenses
- - Prepositions
- - Slang
- - Grammar
+- Idioms
+- Phrasal verbs
+- Vocabulary
+- Verb tenses
+- Prepositions
+- Slang
+- Grammar
 
 ## Tech stack
 
-- **Python 3.14**
-- **Anthropic Claude Sonnet** — puzzle generation with two-method verification
-- **Anthropic Claude Haiku** — English quiz, insight, and joke generation
-- **GitHub Gist** — persistent storage for daily puzzle state (Brainy)
+- **Python 3.13+**
+- **Anthropic Claude Sonnet 4.6** — puzzle generation with two-method verification
+- **Anthropic Claude Haiku 4.5** — English quiz generation (cost-effective)
+- **GitHub Gist** — persistent storage for daily puzzle state and history (Brainy)
 - **requests** — webhook posting and Gist API calls
 - **GitHub Actions** — daily scheduling (cron job, not yet configured)
+
+## Architecture
+
+### Shared utilities (`shared.py`)
+Common functions used by both bots:
+- `ts()` — timestamp logging with millisecond precision
+- `post_to_discord()` — posts to Discord webhook with payload validation (2000 char limit)
+- `post_to_discord_safe()` — wrapper with error handling and logging
+- `parse_json_response()` — parses Claude API responses with helpful error context
+
+### Brainy (puzzle.py)
+- Uses Claude Sonnet 4.6 for higher solution quality
+- Generates puzzles with two-method verification
+- Stores puzzle history (last 5) to minimize semantic duplicates
+- Returns difficulty rating (1-10) and subtle hint
+- All state persisted to GitHub Gist with retry logic
+
+### Daily English Quiz (english-quiz.py)
+- Uses Claude Haiku 4.5 for cost efficiency
+- Generates 5-question quizzes at B1 proficiency level
+- Validates all Discord payloads before posting
+- Graceful error handling for generation failures
 
 ## Setup
 
@@ -52,8 +75,9 @@ Quizzes are randomly selected from:
 - Python 3.13+
 - A Discord webhook URL for the target channel
 - An Anthropic API key (console.anthropic.com)
+
 For Brainy only:
-- A GitHub personal access token with `gist` scope (only for Brainy)
+- A GitHub personal access token with `gist` scope
 - A GitHub Gist ID (create a secret gist with a `puzzle_state.json` file)
 
 ### Local development
@@ -82,7 +106,7 @@ or
 python3 english-quiz.py
 ```
 
-### Initial Gist setup
+### Initial Gist setup (Brainy only)
 
 Create a secret Gist at gist.github.com with a file named `puzzle_state.json` containing:
 ```json
@@ -91,15 +115,57 @@ Create a secret Gist at gist.github.com with a file named `puzzle_state.json` co
   "category": "",
   "puzzle": "",
   "solution_steps": "",
-  "solution_answer": ""
+  "solution_answer": "",
+  "hint": "",
+  "difficulty": 0,
+  "puzzle_history": []
 }
 ```
+
+## Features
+
+### Brainy (Math Puzzle Bot)
+
+**Difficulty Ratings**
+Each puzzle includes a difficulty rating (1-10) so users know what they're getting into:
+- 1-3: Warm-ups
+- 4-6: Standard challenges
+- 7-10: Head-scratchers
+
+**Hints**
+Puzzles include subtle, one-line hints that point to what to think about rather than the solution method. Hints are posted as a separate message with spoiler formatting.
+
+**Puzzle History**
+The bot maintains the last 5 puzzles to inform Claude during generation. The prompt instructs Claude to avoid generating similar puzzles, reducing (but not eliminating) semantic duplicates.
+
+**Two-Method Verification**
+Claude is instructed to solve each puzzle using two independent methods and only finalize if both agree. This increases solution accuracy.
+
+### Daily English Quiz
+
+**B1-Level Content**
+Quizzes target B1 proficiency (intermediate) learners with challenging but achievable questions.
+
+**Multiple Choice Variation**
+When quizzes use multiple choice, answer positions are randomized to avoid patterns.
+
+**Insight and Context**
+Quizzes include an insight that explains the answers or provides additional context about the topic.
 
 ## Notes on answer accuracy
 
 Brainy puzzles are generated by Claude Sonnet using a two-method verification prompt. However, AI-generated solutions can occasionally be incorrect — always verify the answer yourself. The puzzle post includes a reminder to do so.
 
-English Quiz uses Claude Haiku, a lighter model that's more cost-effective for simpler generation tasks. It generally works fine but can also be incorrect. It includes a reminder to verify the answers with an English Helper.
+English Quiz uses Claude Haiku for cost efficiency. It generally works fine but can also be incorrect. It includes a reminder to verify answers with a native English speaker.
+
+## Error handling
+
+Both bots include comprehensive error handling:
+- Discord payload validation (rejects messages >2000 chars)
+- JSON parsing with helpful error context
+- Graceful degradation for generation failures
+- Retry logic for transient errors (Brainy: up to 3 attempts)
+- Detailed logging with timestamps for debugging
 
 ## Deployment
 
@@ -109,13 +175,26 @@ To deploy to a different Discord server, create a webhook in the target channel 
 
 ## Ongoing Cost and Maintenance
 
-The bot leverages the Anthropic API to generate the puzzles and solutions, and each call costs money but a fraction of a penny. When developing, the developer added $5 to the account, which should last years even using the deeper-thinking Claude Sonnet model to ensure better solution accuracy
+The bot leverages the Anthropic API. Each generation costs a fraction of a penny:
+- Brainy (Sonnet): ~0.002-0.003 USD per puzzle times the number of retries (up to 3)
+- English Quiz (Haiku): ~0.0005 USD per quiz
+
+At 1 puzzle + 1 quiz per day + variable retries, you'd spend roughly $0.10-$0.50/month.
 
 ## Future Ideas
 
-- Create a file with example good puzzles to feed into the prompt for better calibration
-- Create a file with example bad puzzles (too easy, too hard, or incorrectly solvable by AI) and why
-- Configure GitHub Actions for automated posting (daily, weekly, TBD). Applies to both puzzles in the repo
-- Slash commands for on-demand puzzle generation, requiring always-on hosting
-- Difficulty rating system
-- Community voting on puzzle quality
+### Near-term
+- Log puzzle metrics (difficulty, category distribution, generation attempts)
+- English quiz: Randomly select B1, B2, or C1 proficiency to vary the difficulty
+
+### Medium-term
+- Create example files for good/bad puzzles to improve prompt calibration
+- Implement difficulty weighting (post easier puzzles more often, or vice versa)
+- Add seasonal themes (holiday-themed puzzles in December, etc.)
+- Configure GitHub Actions for automated posting (daily cron job)
+
+### Longer-term (requires always-on hosting)
+- Slash commands for on-demand puzzle/quiz generation
+- User ratings for puzzles (difficulty, quality, interest)
+- Leaderboard tracking user scores across multiple Discord servers
+- Per-user difficulty preferences

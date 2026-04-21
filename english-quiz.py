@@ -45,7 +45,7 @@ The quiz should:
 - Have a specific, unambiguous answer to each question
 - Be humorous, interesting, or surprising at times (not required, but appreciated)
 - Keep the answers concise and significantly under 1500 characters combined
-- If using multiple choice, ensure the correct answers are not all the same letter (vary answer positions)
+- If using multiple choice, randomize the correct answer positions so that they are different letters (vary answer positions on at least 3)
 - Use Discord formatting: *italics* **bold** ***bold italics*** __underscore__ etc. where appropriate
 - Never include unescaped double quotes in string values; use single quotes or rephrase instead
 
